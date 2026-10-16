@@ -258,3 +258,5 @@ docker build -t mlops_diabetes .          # requires mlruns/ with a champion mod
 docker run -p 8000:8000 mlops_diabetes
 # Docs: http://localhost:8000/docs
 ```
+
+**🚀 Live API:** https://mlops-diabetes-latest.onrender.com/docs
