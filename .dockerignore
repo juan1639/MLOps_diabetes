@@ -1,0 +1,17 @@
+# Virtual environment — dependencies are installed inside the image via requirements.txt
+.venv
+
+# Notebooks are reference material only, not needed at runtime
+notebooks
+
+# Git history adds size and is irrelevant inside the container
+.git
+
+# Byte-compiled files are regenerated automatically by Python
+__pycache__
+**/__pycache__
+**/*.pyc
+
+# Raw and incoming data are not needed to serve the champion model
+data/raw
+data/incoming
