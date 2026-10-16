@@ -7,9 +7,9 @@
 - Each script is self-contained, independently runnable.
 - From raw data ingestion, served, and CI-tested model.
 
-**This project doesn't include Docker containerised**. It's only a example to understand
+The API is containerised with Docker and deployed automatically to **Render** on every push to `master` (see [CI/CD](#cicd)).
 
-**Stack:** Python 3.11 · scikit-learn · MLflow 2.9+ · Pydantic v2 · FastAPI · GitHub Actions
+**Stack:** Python 3.11 · scikit-learn · MLflow 2.9+ · Pydantic v2 · FastAPI · Docker · GitHub Actions · GHCR · Render
 
 ---
 
@@ -30,7 +30,7 @@ Final-project-MLOps/
 ├── requirements.txt                  # Lista todas las librerías externas y dependencias necesarias
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                    # Full pipeline on every push to master
+│       └── ci.yml                    # Pipeline + Docker image + deploy on every push to master
 ├── data/
 │   ├── raw/
 │   │   └── diabetes_dataset.csv      # Downloaded from sklearn by load_data.py
@@ -129,7 +129,7 @@ the held-out test set, and checks two thresholds:
 
 | Metric | Threshold |
 |---|---|
-| RMSE | < 0.52 |
+| RMSE | < 60 |
 | R² | > 0.44 |
 
 I use these thresholds values considering the results obtained.
@@ -201,13 +201,60 @@ curl -X POST http://localhost:8000/predict \
 
 ## CI/CD
 
-Every push to `master` triggers `.github/workflows/ci.yml`, which runs the full
-pipeline in order:
+Every push to `master` (or a manual run from the **Actions** tab) triggers
+`.github/workflows/ci.yml`, which runs the full pipeline in order:
 
 ```
 load_data → validate → preprocess → train → register_model → evaluate_model
+   → docker build → push to GHCR → deploy on Render
 ```
 
 If `evaluate_model.py` exits with code 1 (quality gate not met), the workflow fails
-and no broken model reaches the registry.
+and **no image is built or deployed**: the API keeps serving the previous champion.
 
+### Why the image is built inside the workflow
+
+`mlruns/` is in `.gitignore`, so it doesn't exist in the repository. The GitHub
+Actions runner is a temporary machine: it creates `mlruns/` while training and is
+destroyed when the job ends. Building the Docker image in that same job, right after
+the quality gate, is what puts the champion model inside the image
+(`COPY mlruns/ ./mlruns/`).
+
+The image is published to GitHub Container Registry with two tags:
+
+| Tag | Use |
+|---|---|
+| `ghcr.io/juan1639/mlops_diabetes:latest` | The one Render deploys |
+| `ghcr.io/juan1639/mlops_diabetes:<commit sha>` | History, to roll back to a previous model |
+
+---
+
+## Deploy on Render (one-time setup)
+
+1. **Run the workflow once** (push to `master`) so the image exists in GHCR.
+2. **Make the image public**: GitHub profile → *Packages* → `mlops_diabetes` →
+   *Package settings* → *Change visibility* → **Public**.
+   (Or keep it private and add a GitHub token with `read:packages` as registry
+   credentials in Render.)
+3. In Render: **New** → **Web Service** → **Existing image** →
+   `ghcr.io/juan1639/mlops_diabetes:latest`.
+   - Instance type: *Free*
+   - Health check path: `/health`
+   - No need to set the port: Render provides `PORT` and the Dockerfile uses it.
+4. Copy the service's **Deploy Hook** URL (*Settings* → *Deploy Hook*).
+5. In GitHub: *Settings* → *Secrets and variables* → *Actions* → **New repository
+   secret** named `RENDER_DEPLOY_HOOK` with that URL.
+
+From then on, every push to `master` retrains, evaluates and, if the model passes
+the gate, redeploys the API automatically.
+
+> On the free plan the service sleeps after a period without traffic, so the
+> first request after a while can take some time to respond.
+
+### Docker (local)
+
+```bash
+docker build -t mlops_diabetes .          # requires mlruns/ with a champion model
+docker run -p 8000:8000 mlops_diabetes
+# Docs: http://localhost:8000/docs
+```
