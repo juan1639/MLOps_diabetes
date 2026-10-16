@@ -1,14 +1,34 @@
-name: CI — Training Pipeline
+name: CI/CD — Training Pipeline + Deploy to Render
 
 on:
   push:
     branches:
       - master
+  # Allows running the pipeline manually from the "Actions" tab
+  workflow_dispatch:
+
+# The default GITHUB_TOKEN needs permission to publish the Docker image
+# to GitHub Container Registry (ghcr.io)
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # Docker image names must be lowercase
+  IMAGE_NAME: ghcr.io/juan1639/mlops_diabetes
 
 jobs:
   pipeline:
     runs-on: ubuntu-latest
+    env:
+      # Render deploy hook URL, stored as a repository secret
+      # (Settings → Secrets and variables → Actions → RENDER_DEPLOY_HOOK)
+      RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
     steps:
+      # ======================================================================
+      #  CI — Continuous training (data → model → quality gate)
+      # ======================================================================
+
       # Download the repository files onto the runner
       - name: Checkout code
         uses: actions/checkout@v4
@@ -17,6 +37,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
       # Install all project libraries
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -29,12 +50,46 @@ jobs:
       # Fill nulls, fix types → data/processed/train_v1.csv
       - name: Preprocess data
         run: python src/data/preprocess.py
-      # Train LinearRegression and RandomForest; log runs to MLflow
+      # Train LinearRegression and RandomForest; log runs to MLflow (mlruns/)
       - name: Train models
         run: python src/models/train.py
       # Register the best run in the MLflow Model Registry
       - name: Register model
         run: python src/models/register_model.py
-      # Run quality gate: exit 1 if rmse >= 0.52 or r2 <= 0.44
+      # Run quality gate: exit 1 if rmse >= 60 or r2 <= 0.44
+      # If it fails, the workflow stops here and nothing gets deployed.
       - name: Evaluate model
         run: python src/models/evaluate_model.py
+
+      # ======================================================================
+      #  CD — Package the champion model in a Docker image and deploy it
+      # ======================================================================
+      # At this point mlruns/ exists on the runner with the 'champion' alias,
+      # so the Dockerfile's "COPY mlruns/" works (mlruns/ is not in git).
+
+      # Log in to GitHub Container Registry with the workflow's own token
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build the image and push it with two tags:
+      #   :latest     → the one Render deploys
+      #   :<commit>   → keeps a history to roll back to a previous version
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      # Ask Render to pull the new :latest image and restart the service.
+      # RENDER_DEPLOY_HOOK is a repository secret (Settings → Secrets → Actions).
+      # Skipped (not failed) while the secret has not been configured yet.
+      - name: Trigger deploy on Render
+        if: ${{ env.RENDER_DEPLOY_HOOK != '' }}
+        run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK"

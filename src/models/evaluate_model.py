@@ -3,7 +3,7 @@ This module formally evaluates the latest version of the registered model
 "diabetes-dataset-model" using mlflow.evaluate().
 
 Results are logged to a dedicated MLflow run. If the model passes the quality
-thresholds (rmse < 0.52 and r2 > 0.44) the alias "champion" is assigned to that
+thresholds (rmse < 60 and r2 > 0.44) the alias "champion" is assigned to that
 model version, marking it as the go-to model for serving.
 """
 
@@ -47,6 +47,7 @@ instead of transitioning to "Production", we assign a human-readable alias
 =============================================================================
 """
 import logging
+import sys
 from datetime import datetime
 from pathlib import Path
 import mlflow
@@ -59,7 +60,7 @@ from sklearn.model_selection import train_test_split
 #  Paths & constants
 #  
 # ---------------------------------------------------------------------------
-BASE_DIR = Path(__name__).resolve().parents[2]
+BASE_DIR = Path(__file__).resolve().parents[2]
 INPUT_PATH = BASE_DIR / "data" / "processed" / "train_v1.csv"   # usamos train_v1.csv (SIN feature_engineering)
 MLFLOW_TRACKING_URI = BASE_DIR / "mlruns"
 
@@ -70,7 +71,11 @@ TEST_SIZE = 0.2
 RANDOM_STATE = 42
 
 # Quality thresholds for the champion alias:
-RMSE_THRESHOLD = 0.52   # uso este umbral en vista de los resultados obtenidos
+# El target del dataset diabetes está en su escala original (25–346, desviación
+# típica ≈ 77), así que el RMSE se mide en esas mismas unidades (≈ 54 con estos
+# modelos). Un umbral de 0.52 no se podía cumplir nunca. Un modelo que siempre
+# predijera la media tendría RMSE ≈ 77; exigir < 60 obliga a mejorar claramente eso.
+RMSE_THRESHOLD = 60.0
 R2_THRESHOLD = 0.44     # uso este umbral en vista de los resultados obtenidos
 
 # =============================================================================
@@ -228,7 +233,7 @@ def passes_quality_gate(metrics: dict) -> bool:
     """Return True if the model meets the minimum quality thresholds.
 
     Thresholds:
-        - ``mean_squared_error`` (RMSE equivalent via sqrt): rmse < 0.6
+        - ``mean_squared_error`` (RMSE equivalent via sqrt): rmse < RMSE_THRESHOLD
         - ``r2_score``: r2 > 0.7
 
     mlflow.evaluate() for regressors logs ``mean_squared_error`` (MSE) and
@@ -247,7 +252,7 @@ def passes_quality_gate(metrics: dict) -> bool:
     r2 = metrics.get("r2_score", float("-inf"))
 
     logger.info(
-        "Quality gate check — rmse=%.4f (threshold < %.1f)  r2=%.4f (threshold > %.1f)",
+        "Quality gate check — rmse=%.4f (threshold < %.2f)  r2=%.4f (threshold > %.2f)",
         rmse, RMSE_THRESHOLD, r2, R2_THRESHOLD,
     )
 
@@ -314,6 +319,9 @@ def main() -> None:
             "Alias 'champion' was NOT assigned.",
             model_version,
         )
+        # Exit with an error so the CI pipeline stops here and never
+        # builds or deploys an image with a model that failed the gate.
+        sys.exit(1)
 
     logger.info(
         "Done. Open the MLflow UI to review the evaluation run:\n"
