@@ -1,6 +1,6 @@
-# Final Project MLOps - Juan Eguía Abad
+# MLOps - Diabetes dataset
 
-[Link to my repository:]<https://github.com/juan1639/final-project-MLOps-Juan-Eguia>
+[Link]<https://github.com/juan1639/MLOps_diabetes>
 
 
 - End-to-end MLOps pipeline built on the **diabetes** dataset.
