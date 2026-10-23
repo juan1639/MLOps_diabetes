@@ -1,0 +1,22 @@
+# Dependabot checks the project's dependencies every week and opens a
+# Pull Request when an update (or a security fix) is available.
+# The CI workflow runs on each PR, so updates are tested before merging.
+version: 2
+updates:
+  # Python libraries in requirements.txt
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Base image in the Dockerfile (python:3.11-slim)
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Actions used in .github/workflows/ (checkout, setup-python, docker/*)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

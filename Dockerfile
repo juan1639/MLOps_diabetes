@@ -10,6 +10,11 @@ COPY src/ ./src/
 
 COPY mlruns/ ./mlruns/
 
+# Run the app as a regular (non-root) user, so a bug in the API cannot be used
+# to get administrator rights inside the container
+RUN useradd --create-home appuser
+USER appuser
+
 EXPOSE 8000
 
 # Render (and most cloud services) tell the app which port to use through the
