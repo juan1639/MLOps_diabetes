@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - master
+  # Also run on Pull Requests to master (e.g. Dependabot updates), so changes
+  # are tested BEFORE merging. On PRs only the CI part runs: the Docker image
+  # is built to check it works, but it is not published or deployed.
+  pull_request:
+    branches:
+      - master
   # Allows running the pipeline manually from the "Actions" tab
   workflow_dispatch:
 
@@ -68,7 +74,9 @@ jobs:
       # so the Dockerfile's "COPY mlruns/" works (mlruns/ is not in git).
 
       # Log in to GitHub Container Registry with the workflow's own token
+      # (skipped on Pull Requests: nothing is published there)
       - name: Log in to GHCR
+        if: ${{ github.event_name != 'pull_request' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -78,11 +86,13 @@ jobs:
       # Build the image and push it with two tags:
       #   :latest     → the one Render deploys
       #   :<commit>   → keeps a history to roll back to a previous version
+      # On Pull Requests the image is only built (push: false), to check that
+      # the Dockerfile still works with the proposed changes.
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
@@ -90,6 +100,7 @@ jobs:
       # Ask Render to pull the new :latest image and restart the service.
       # RENDER_DEPLOY_HOOK is a repository secret (Settings → Secrets → Actions).
       # Skipped (not failed) while the secret has not been configured yet.
+      # Never runs on Pull Requests: only merged code gets deployed.
       - name: Trigger deploy on Render
-        if: ${{ env.RENDER_DEPLOY_HOOK != '' }}
+        if: ${{ github.event_name != 'pull_request' && env.RENDER_DEPLOY_HOOK != '' }}
         run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK"
