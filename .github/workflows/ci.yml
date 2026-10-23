@@ -37,7 +37,7 @@ jobs:
 
       # Download the repository files onto the runner
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       # Install the Python version used in development
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
