@@ -51,7 +51,8 @@ Final-project-MLOps/
 │   ├── models/
 │   │   ├── train.py                  # MLflow Experiment Tracking
 │   │   ├── register_model.py         # MLflow Model Registry
-│   │   └── evaluate_model.py         # Quality gate + champion vs challenger
+│   │   ├── evaluate_model.py         # Quality gate + champion vs challenger
+│   │   └── prune_artifacts.py        # Delete model files of unregistered runs
 │   └── api/
 │       ├── schemas.py                # Pydantic request / response models
 │       ├── model.py                  # MLflow model loader and state
@@ -264,7 +265,7 @@ Every push to `master` (or a manual run from the **Actions** tab) triggers
 
 ```
 ruff → pytest → restore mlruns/ from the deployed image
-   → load_data → validate → preprocess → train → register_model → evaluate_model
+   → load_data → validate → preprocess → train → register_model → evaluate_model → prune_artifacts
    → docker build → push to GHCR → deploy on Render
 ```
 
@@ -278,8 +279,12 @@ fails and **no image is built or deployed**: the API keeps serving the previous 
 If the new model is simply not better, the champion is kept and the image is still built
 (so code changes are deployed).
 
-> `mlruns/` grows with every run (≈ 3 MB per run: 3 models + evaluations), and it goes
-> into the image. The "MLflow store size" step shows its size.
+> `mlruns/` goes into the image and is kept from one run to the next. To keep it small,
+> `prune_artifacts.py` deletes the model files of the training runs that were never
+> registered (≈ 3 MB each for RandomForest). Their params, metrics and tags stay in the
+> history (tag `model_artifact=pruned`), and the files of every registered version are
+> kept (rollback). The store then grows only ≈ 0.15 MB per run; the "MLflow store size"
+> step shows its size.
 
 ### Why the image is built inside the workflow
 

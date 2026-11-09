@@ -98,6 +98,10 @@ jobs:
       # Exit 1 (nothing deployed) only if NO model passes the gate.
       - name: Evaluate model
         run: python -m src.models.evaluate_model
+      # Delete the model files of training runs that were never registered
+      # (metrics and history are kept), so mlruns/ and the image stay small
+      - name: Prune unregistered model files
+        run: python -m src.models.prune_artifacts
       # Size of the MLflow store that goes into the image (it grows with each run)
       - name: MLflow store size
         run: du -sh mlruns
