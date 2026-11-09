@@ -29,3 +29,7 @@ Thumbs.db
 
 # Ignore db
 mlflow.db
+
+# Ignore tool caches (ruff, pytest)
+.ruff_cache/
+.pytest_cache/

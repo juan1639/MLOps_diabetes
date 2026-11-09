@@ -51,32 +51,24 @@ import sys
 from datetime import datetime
 from pathlib import Path
 import mlflow
-import mlflow.sklearn
 import pandas as pd
 from mlflow.tracking import MlflowClient
 from sklearn.model_selection import train_test_split
 
-# ===========================================================================
-#  Paths & constants
-#  
-# ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parents[2]
-INPUT_PATH = BASE_DIR / "data" / "processed" / "train_v1.csv"   # usamos train_v1.csv (SIN feature_engineering)
-MLFLOW_TRACKING_URI = BASE_DIR / "mlruns"
-
-EXPERIMENT_NAME = "diabetes-dataset"
-REGISTERED_MODEL_NAME = "diabetes-dataset-model"
-TARGET = "target"
-TEST_SIZE = 0.2
-RANDOM_STATE = 42
-
-# Quality thresholds for the champion alias:
-# El target del dataset diabetes está en su escala original (25–346, desviación
-# típica ≈ 77), así que el RMSE se mide en esas mismas unidades (≈ 54 con estos
-# modelos). Un umbral de 0.52 no se podía cumplir nunca. Un modelo que siempre
-# predijera la media tendría RMSE ≈ 77; exigir < 60 obliga a mejorar claramente eso.
-RMSE_THRESHOLD = 60.0
-R2_THRESHOLD = 0.44     # uso este umbral en vista de los resultados obtenidos
+# Same TEST_SIZE / RANDOM_STATE as train.py (shared config), so the test set is identical.
+# Quality thresholds (RMSE_THRESHOLD, R2_THRESHOLD) are explained in src/config.py.
+from src.config import (
+    CHAMPION_ALIAS,
+    EXPERIMENT_NAME,
+    MLFLOW_TRACKING_URI,
+    PROCESSED_PATH as INPUT_PATH,   # usamos train_v1.csv (SIN feature_engineering)
+    R2_THRESHOLD,
+    RANDOM_STATE,
+    REGISTERED_MODEL_NAME,
+    RMSE_THRESHOLD,
+    TARGET,
+    TEST_SIZE,
+)
 
 # =============================================================================
 #  Logging
@@ -94,12 +86,12 @@ logger = logging.getLogger(__name__)
 #  
 # ---------------------------------------------------------------------------
 def load_test_data(path: Path) -> tuple[pd.DataFrame, pd.Series]:
-    """Load engineered features and return the held-out test split.
+    """Load the processed dataset and return the held-out test split.
 
     Uses the same split parameters as train.py so the test set is identical.
 
     Args:
-        path: Path to train_features_v1.csv.
+        path: Path to train_v1.csv.
 
     Returns:
         Tuple of (X_test, y_test) as DataFrame and Series.
@@ -111,7 +103,7 @@ def load_test_data(path: Path) -> tuple[pd.DataFrame, pd.Series]:
     if not path.exists():
         raise FileNotFoundError(
             f"Input file not found: {path}\n"
-            "Run the data pipeline first: python src/data/feature_engineering.py"
+            "Run the data pipeline first: python -m src.data.preprocess"
         )
 
     df = pd.read_csv(path)
@@ -150,7 +142,7 @@ def get_latest_version(client: MlflowClient, model_name: str) -> str:
     if not versions:
         raise ValueError(
             f"No versions found for registered model '{model_name}'.\n"
-            "Run register_model.py first."
+            "Run 'python -m src.models.register_model' first."
         )
     
     latest = max(versions, key=lambda v: int(v.version))
@@ -234,7 +226,7 @@ def passes_quality_gate(metrics: dict) -> bool:
 
     Thresholds:
         - ``mean_squared_error`` (RMSE equivalent via sqrt): rmse < RMSE_THRESHOLD
-        - ``r2_score``: r2 > 0.7
+        - ``r2_score``: r2 > R2_THRESHOLD
 
     mlflow.evaluate() for regressors logs ``mean_squared_error`` (MSE) and
     ``r2_score`` by default. We derive RMSE from MSE for the gate check.
@@ -279,7 +271,7 @@ def assign_champion_alias(client: MlflowClient, model_name: str, model_version: 
 
     client.set_registered_model_alias(
         name=model_name,
-        alias="champion",
+        alias=CHAMPION_ALIAS,
         version=model_version,
     )
 

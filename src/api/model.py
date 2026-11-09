@@ -8,21 +8,19 @@ loaded model safely.
 
 import logging
 import os
-from pathlib import Path
 import mlflow
 import mlflow.pyfunc
 from mlflow import MlflowClient
 from fastapi import HTTPException
 
+from src.config import CHAMPION_ALIAS, MLFLOW_TRACKING_URI, REGISTERED_MODEL_NAME
+
 # ===========================================================================
 #  Paths & constants — tracking URI and model registry identifiers
 #  
 # ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parents[2]
-MLFLOW_TRACKING_URI = BASE_DIR / "mlruns"
-
-MODEL_NAME = "diabetes-dataset-model"
-MODEL_ALIAS = "champion"
+MODEL_NAME = REGISTERED_MODEL_NAME
+MODEL_ALIAS = CHAMPION_ALIAS
 MODEL_URI = f"models:/{MODEL_NAME}@{MODEL_ALIAS}"
 
 # ===========================================================================

@@ -8,8 +8,8 @@ and registers that model under the name "diabetes-dataset-model".
 """
 The Model Registry is a central store for versioned models. After tracking
 experiments, we promote the best run's model artifact so it can be referenced
-by name and stage (None → Staging → Production) without coupling consumers
-to a specific run ID.
+by name and version (and later by alias, see evaluate_model.py) without
+coupling consumers to a specific run ID.
 """
 """
 =============================================================================
@@ -33,19 +33,10 @@ to a specific run ID.
 =============================================================================
 """
 import logging
-from pathlib import Path
 import mlflow
 from mlflow.tracking import MlflowClient
 
-# ===========================================================================
-#  Paths & constants
-#  
-# ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parents[2]
-MLFLOW_TRACKING_URI = BASE_DIR / "mlruns"
-
-EXPERIMENT_NAME = "diabetes-dataset"
-REGISTERED_MODEL_NAME = "diabetes-dataset-model"
+from src.config import EXPERIMENT_NAME, MLFLOW_TRACKING_URI, REGISTERED_MODEL_NAME
 
 # ===========================================================================
 #  Logging
@@ -63,7 +54,10 @@ logger = logging.getLogger(__name__)
 #  
 # ---------------------------------------------------------------------------
 def get_best_run(client: MlflowClient, experiment_name: str) -> mlflow.entities.Run:
-    """Return the finished run with the lowest RMSE in the given experiment.
+    """Return the finished TRAINING run with the lowest RMSE in the given experiment.
+
+    Evaluation runs (created by evaluate_model.py in the same experiment) have
+    no 'rmse' metric and no model artifact, so they are excluded by tag.
 
     Args:
         client: An active MlflowClient instance.
@@ -86,13 +80,13 @@ def get_best_run(client: MlflowClient, experiment_name: str) -> mlflow.entities.
 
     runs = client.search_runs(
         experiment_ids=[experiment.experiment_id],
-        filter_string="status = 'FINISHED'",
+        filter_string="status = 'FINISHED' and tags.stage = 'training'",
         order_by=["metrics.rmse ASC"],
         max_results=1,
     )
 
     if not runs:
-        raise ValueError(f"No finished runs found in experiment '{experiment_name}'.")
+        raise ValueError(f"No finished training runs found in experiment '{experiment_name}'.")
 
     best = runs[0]
 
@@ -116,6 +110,8 @@ def register_model(
     """Register the model artifact from a run into the Model Registry.
 
     If the registered model does not exist yet, MLflow creates it automatically.
+    If this run is already registered (e.g. the script is run twice without
+    retraining), the existing version is returned instead of creating a duplicate.
 
     Args:
         client: An active MlflowClient instance.
@@ -125,6 +121,18 @@ def register_model(
     Returns:
         The created ModelVersion object.
     """
+
+    existing = client.search_model_versions(
+        f"name='{registered_model_name}' and run_id='{run.info.run_id}'"
+    )
+    if existing:
+        version = max(existing, key=lambda v: int(v.version))
+        logger.info(
+            "Run %s is already registered as version %s — not creating a new one.",
+            run.info.run_id,
+            version.version,
+        )
+        return version
 
     model_uri = f"runs:/{run.info.run_id}/model"
     logger.info("Registering model from URI: %s", model_uri)
@@ -181,7 +189,7 @@ def add_model_description(
 #  
 # ---------------------------------------------------------------------------
 def main() -> None:
-    """Find the best run in the california-housing experiment and register it."""
+    """Find the best training run in the diabetes-dataset experiment and register it."""
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI.as_uri())
     client = MlflowClient()

@@ -38,7 +38,8 @@ from .model import (
     load_champion_model
 )
 
-from .schemas import FEATURE_COLUMNS, DiabetesFeatures, PredictionResponse
+from .schemas import DiabetesFeatures, PredictionResponse
+from src.config import FEATURE_COLUMNS
 
 # ===========================================================================
 #  Logging —> configure once for the whole application at entry point

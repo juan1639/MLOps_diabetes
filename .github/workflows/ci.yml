@@ -44,28 +44,34 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      # Install all project libraries
+      # Install all project libraries + dev tools (pytest, ruff)
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
+      # Static checks: unused imports, undefined names, style errors...
+      - name: Lint (ruff)
+        run: ruff check .
+      # Unit tests (data cleaning/validation, quality gate, registry, API)
+      - name: Run tests
+        run: pytest
       # Download Diabetes dataset and save to data/raw/
       - name: Load raw data
-        run: python src/data/load_data.py
+        run: python -m src.data.load_data
       # Simple data validation
       - name: Validate data
-        run: python src/data/validate_data.py
+        run: python -m src.data.validate_data
       # Fill nulls, fix types → data/processed/train_v1.csv
       - name: Preprocess data
-        run: python src/data/preprocess.py
-      # Train LinearRegression and RandomForest; log runs to MLflow (mlruns/)
+        run: python -m src.data.preprocess
+      # Train LinearRegression, RandomForest and GradientBoosting; log runs to MLflow (mlruns/)
       - name: Train models
-        run: python src/models/train.py
+        run: python -m src.models.train
       # Register the best run in the MLflow Model Registry
       - name: Register model
-        run: python src/models/register_model.py
+        run: python -m src.models.register_model
       # Run quality gate: exit 1 if rmse >= 60 or r2 <= 0.44
       # If it fails, the workflow stops here and nothing gets deployed.
       - name: Evaluate model
-        run: python src/models/evaluate_model.py
+        run: python -m src.models.evaluate_model
 
       # ======================================================================
       #  CD — Package the champion model in a Docker image and deploy it

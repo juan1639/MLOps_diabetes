@@ -7,23 +7,6 @@ used by FastAPI to validate requests and serialise responses automatically.
 
 from pydantic import BaseModel
 
-# ===========================================================================
-# Feature columns:
-#   - Ordered list that matches train_v1.csv ( no target )
-#  
-# ---------------------------------------------------------------------------
-FEATURE_COLUMNS = [
-    "age",
-    "sex",
-    "bmi",
-    "bp",
-    "s1",
-    "s2",
-    "s3",
-    "s4",
-    "s5",
-    "s6"
-]
 
 # ===========================================================================
 #  Schemas — request body (input) and response body (output)

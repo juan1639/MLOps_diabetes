@@ -12,12 +12,13 @@
 """
 
 import os
-#import numpy as np
 import pandas as pd
 from sklearn.datasets import load_diabetes
 
+from src.config import RAW_PATH
+
 # ==========================================================================
-OUTPUT_PATH = "data/raw/diabetes_dataset.csv"
+OUTPUT_PATH = RAW_PATH
 
 # ==========================================================================
 def load_raw_data() -> pd.DataFrame:
