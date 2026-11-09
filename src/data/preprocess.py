@@ -1,6 +1,7 @@
 """
-This module cleans the raw dataset
-It outputs a processed dataset ready for machine learning.
+This module merges the raw dataset with any new rows in data/incoming/*.csv,
+cleans the result and outputs a processed dataset ready for machine learning.
+(validate_data.py checks the incoming files before this step.)
 
     *************************************************************************
     Voy a usar --- train_v1.csv --- para entrenar los datos,
@@ -10,6 +11,7 @@ It outputs a processed dataset ready for machine learning.
 """
 ============================================================================
 - Load raw data --> 'data/raw/diabetes_dataset.csv'
+- Add new rows  --> 'data/incoming/*.csv' (if any)
     (print 'rows_before cleaning')
 
 - Clean data:
@@ -26,7 +28,7 @@ It outputs a processed dataset ready for machine learning.
 import pandas as pd
 from pathlib import Path
 
-from src.config import PROCESSED_PATH, RAW_PATH
+from src.config import FEATURE_COLUMNS, INCOMING_DIR, PROCESSED_PATH, RAW_PATH, TARGET
 
 # =========================================================================
 def load_data(path: Path) -> pd.DataFrame:
@@ -34,6 +36,23 @@ def load_data(path: Path) -> pd.DataFrame:
     Load a CSV file and return a DataFrame.
     """
     return pd.read_csv(path)
+
+# =========================================================================
+def add_incoming_data(df: pd.DataFrame, incoming_dir: Path) -> pd.DataFrame:
+    """Append every CSV in ``incoming_dir`` to ``df`` (same column order as raw).
+
+    Files are read in name order, so the result (and the dataset hash) is reproducible.
+    """
+
+    columns = FEATURE_COLUMNS + [TARGET]
+    frames = [df[columns]]
+
+    for path in sorted(incoming_dir.glob("*.csv")):
+        new = pd.read_csv(path)
+        print(f"  + {len(new)} rows from {path.name}")
+        frames.append(new[columns])
+
+    return pd.concat(frames, ignore_index=True)
 
 # =========================================================================
 def clean_data(input_df: pd.DataFrame) -> pd.DataFrame:
@@ -68,6 +87,10 @@ def main() -> None:
     # ---- load raw data ---------------------------------
     print("Loading raw data...")
     df = load_data(RAW_PATH)
+
+    # ---- add new rows from data/incoming/ ---------------
+    print("Adding incoming data...")
+    df = add_incoming_data(df, INCOMING_DIR)
     print(f"Shape before cleaning: {df.shape}")
 
     # ---- clean data ------------------------------------

@@ -1,14 +1,18 @@
 """Tests for the FastAPI app, using a fake model instead of the real MLflow one."""
 
+import json
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 import src.api.main as main
 from src.api.model import MODEL_NAME, _state
+from src.api.monitoring import out_of_range_features
 from src.config import FEATURE_COLUMNS
 
 VALID_BODY = {col: 0.01 for col in FEATURE_COLUMNS}
+FEATURE_STATS = {col: {"min": -0.1, "max": 0.1} for col in FEATURE_COLUMNS}
 
 
 class FakeModel:
@@ -27,7 +31,7 @@ def fake_model(monkeypatch):
     model = FakeModel()
 
     def fake_load():
-        _state.update(model=model, model_version="7", run_id="abc123")
+        _state.update(model=model, model_version="7", run_id="abc123", feature_stats=FEATURE_STATS)
 
     # main.py calls load_champion_model() in the lifespan hook at startup
     monkeypatch.setattr(main, "load_champion_model", fake_load)
@@ -89,3 +93,32 @@ def test_endpoints_return_503_if_model_not_loaded(monkeypatch):
     c = TestClient(main.app)
     assert c.get("/model-info").status_code == 503
     assert c.post("/predict", json=VALID_BODY).status_code == 503
+
+
+# ===========================================================================
+#  Monitoring
+# ---------------------------------------------------------------------------
+def test_predict_logs_prediction_as_json(client, caplog):
+    with caplog.at_level("INFO", logger="src.api.monitoring"):
+        client.post("/predict", json=VALID_BODY)
+
+    record = json.loads(caplog.records[-1].getMessage())
+    assert record["event"] == "prediction"
+    assert record["model_version"] == "7"
+    assert record["features"] == VALID_BODY
+    assert record["out_of_range"] == []
+
+
+def test_predict_warns_about_unscaled_input(client, caplog):
+    body = {**VALID_BODY, "age": 45.0}   # real age instead of the scaled value
+
+    with caplog.at_level("INFO", logger="src.api.monitoring"):
+        response = client.post("/predict", json=body)
+
+    assert response.status_code == 200   # still predicts, but leaves a warning
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings and "age" in warnings[0].getMessage()
+
+
+def test_range_check_is_skipped_without_stats():
+    assert out_of_range_features({"age": 1000.0}, None) == []

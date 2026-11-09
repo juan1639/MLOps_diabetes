@@ -38,6 +38,7 @@ from .model import (
     load_champion_model
 )
 
+from .monitoring import log_prediction, out_of_range_features
 from .schemas import DiabetesFeatures, PredictionResponse
 from src.config import FEATURE_COLUMNS
 
@@ -117,7 +118,8 @@ def predict(features: DiabetesFeatures) -> PredictionResponse:
 
     # Converts pydantic object into a DataFrame (predict needs a DataFrame param)
     # ( pydantic-object --> dict --> DataFrame )
-    input_df = pd.DataFrame([features.model_dump()], columns=FEATURE_COLUMNS)
+    values = features.model_dump()
+    input_df = pd.DataFrame([values], columns=FEATURE_COLUMNS)
 
     try:
         prediction = model.predict(input_df)
@@ -126,7 +128,10 @@ def predict(features: DiabetesFeatures) -> PredictionResponse:
         raise HTTPException(status_code=500, detail="Prediction error.") from exc
 
     result = float(prediction[0])
-    logger.info("Prediction: %.4f", result)
+
+    # Monitoring: one JSON log line per prediction + warning if inputs look unscaled
+    flagged = out_of_range_features(values, _state["feature_stats"])
+    log_prediction(values, result, _state["model_version"], flagged)
 
     # And return a pydantic object:
     return PredictionResponse(prediction=result, model_version=_state["model_version"])

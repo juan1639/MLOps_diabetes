@@ -13,7 +13,8 @@ import mlflow.pyfunc
 from mlflow import MlflowClient
 from fastapi import HTTPException
 
-from src.config import CHAMPION_ALIAS, MLFLOW_TRACKING_URI, REGISTERED_MODEL_NAME
+from src.config import CHAMPION_ALIAS, FEATURE_STATS_FILE, MLFLOW_TRACKING_URI, REGISTERED_MODEL_NAME
+from .monitoring import load_feature_stats
 
 # ===========================================================================
 #  Paths & constants — tracking URI and model registry identifiers
@@ -37,6 +38,7 @@ _state: dict = {
     "model": None,
     "model_version": None,
     "run_id": None,
+    "feature_stats": None,   # training min/max per feature (input monitoring)
 }
 
 # ===========================================================================
@@ -71,14 +73,14 @@ def load_champion_model() -> None:
         run = client.get_run(mv.run_id)
 
         # set a relative path about tracking store:
-        model_path = (
-            MLFLOW_TRACKING_URI / run.info.experiment_id / mv.run_id / "artifacts" / "model"
-        )
+        artifacts_dir = MLFLOW_TRACKING_URI / run.info.experiment_id / mv.run_id / "artifacts"
+        model_path = artifacts_dir / "model"
 
         # Set the '_state dict' values:
         _state["model"] = mlflow.pyfunc.load_model(str(model_path))
         _state["model_version"] = str(mv.version)
         _state["run_id"] = mv.run_id
+        _state["feature_stats"] = load_feature_stats(artifacts_dir / FEATURE_STATS_FILE)
 
         logger.info("Model loaded — version=%s  run_id=%s", mv.version, mv.run_id)
     

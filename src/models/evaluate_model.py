@@ -1,10 +1,13 @@
 """
-This module formally evaluates the latest version of the registered model
-"diabetes-dataset-model" using mlflow.evaluate().
+This module decides which model version is the "champion" (the one the API serves).
 
-Results are logged to a dedicated MLflow run. If the model passes the quality
-thresholds (rmse < 60 and r2 > 0.44) the alias "champion" is assigned to that
-model version, marking it as the go-to model for serving.
+It evaluates, with mlflow.evaluate() and on the CURRENT test set:
+    - the "challenger" (best new version, set by register_model.py)
+    - the current "champion", if there is one
+
+The challenger replaces the champion only if it passes the quality thresholds
+(rmse < 60 and r2 > 0.44) AND is not worse than the champion (rmse <=).
+If no model is good enough, the script exits with code 1 so CI deploys nothing.
 """
 
 """
@@ -14,6 +17,11 @@ EvaluationResult (metrics + artifacts) attached to a run, enabling reproducible
 quality gates. Aliases replace the deprecated Stage system in MLflow 2.9+:
 instead of transitioning to "Production", we assign a human-readable alias
 ("champion") that consumers can reference without knowing the version number.
+
+Champion / challenger: passing fixed thresholds is not enough. A new model could
+pass them and still be worse than the one already in production. Both are
+evaluated on the same (current) test set, so the comparison is fair even when
+the data changed since the champion was trained (e.g. new rows in data/incoming/).
 """
 
 """
@@ -23,56 +31,49 @@ instead of transitioning to "Production", we assign a human-readable alias
 
 - client = MlflowClient()
 
-- model_version = get_latest_version(
-        client,
-        REGISTERED_MODEL_NAME
-    )                                           -> Resolve model version
+- challenger = get_version_by_alias(client, "challenger")   -> candidato
+- champion   = get_version_by_alias(client, "champion")     -> actual (o None)
 
-- X_test, y_test = load_test_data(INPUT_PATH)   -> Load test data
+- X_test, y_test = load_test_data(INPUT_PATH)               -> Load test data
 
-- result = evaluate_registered_model(
-        client,
-        model_version,
-        X_test, y_test
-    )                                           -> Evaluate
+- evaluate_registered_model(...) para challenger y champion -> Evaluate
 
-- if passes_quality_gate(result.metrics):
-        logger.info("Model passed the quality gate.")
-        assign_champion_alias(
-            client,
-            REGISTERED_MODEL_NAME,
-            model_version
-        )                                       -> quality-gate
+  (si el champion se entreno con otro split -> no se compara, solo umbrales)
+
+- winner = choose_champion(challenger_metrics, champion_metrics)
+    - "challenger" -> assign_champion_alias(challenger)
+    - "champion"   -> se mantiene el champion actual
+    - None         -> sys.exit(1)  (CI no despliega)
 
 =============================================================================
 """
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 import mlflow
 import pandas as pd
+from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
-from sklearn.model_selection import train_test_split
 
-# Same TEST_SIZE / RANDOM_STATE as train.py (shared config), so the test set is identical.
 # Quality thresholds (RMSE_THRESHOLD, R2_THRESHOLD) are explained in src/config.py.
 from src.config import (
+    CHALLENGER_ALIAS,
     CHAMPION_ALIAS,
     EXPERIMENT_NAME,
     MLFLOW_TRACKING_URI,
     PROCESSED_PATH as INPUT_PATH,   # usamos train_v1.csv (SIN feature_engineering)
     R2_THRESHOLD,
-    RANDOM_STATE,
     REGISTERED_MODEL_NAME,
     RMSE_THRESHOLD,
     TARGET,
-    TEST_SIZE,
 )
+from src.data.split import SPLIT_METHOD, split_train_test
 
 # =============================================================================
 #  Logging
-#  
+#
 # ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -81,14 +82,23 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
+def ci_warning(message: str) -> None:
+    """Log a warning and, inside GitHub Actions, also show it in the run summary."""
+    logger.warning(message)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::warning::{message}")
+
 # =============================================================================
 #  Data
-#  
+#
 # ---------------------------------------------------------------------------
 def load_test_data(path: Path) -> tuple[pd.DataFrame, pd.Series]:
     """Load the processed dataset and return the held-out test split.
 
-    Uses the same split parameters as train.py so the test set is identical.
+    Uses the same stable split as train.py (src/data/split.py), so the test set
+    never contains rows the models were trained with — not even the champion's,
+    when new rows were added after it was trained.
 
     Args:
         path: Path to train_v1.csv.
@@ -109,99 +119,95 @@ def load_test_data(path: Path) -> tuple[pd.DataFrame, pd.Series]:
     df = pd.read_csv(path)
     logger.info("Loaded %d rows from %s", len(df), path)
 
-    X = df.drop(columns=[TARGET])
-    y = df[TARGET]
-
-    _, X_test, _, y_test = train_test_split(X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE)
+    _, X_test, _, y_test = split_train_test(df)
 
     logger.info("Test set size: %d rows", len(X_test))
     return X_test, y_test
 
 # =============================================================================
 #  Registry helpers
-#  
+#
 # ---------------------------------------------------------------------------
-def get_latest_version(client: MlflowClient, model_name: str) -> str:
-    """Return the version number of the most recently registered model version.
-
-    Searches all versions and returns the one with the highest version integer.
+def get_version_by_alias(client: MlflowClient, model_name: str, alias: str) -> str | None:
+    """Return the version that holds ``alias``, or None if the alias does not exist.
 
     Args:
         client: An active MlflowClient instance.
         model_name: Registered model name.
+        alias: Alias to resolve (e.g. "champion" or "challenger").
 
     Returns:
-        Version number as a string (e.g. ``"3"``).
-
-    Raises:
-        ValueError: If no versions exist for the given model name.
+        Version number as a string (e.g. ``"3"``), or None.
     """
 
-    versions = client.search_model_versions(f"name='{model_name}'")
+    try:
+        version = client.get_model_version_by_alias(model_name, alias).version
+    except MlflowException:
+        logger.info("No version of '%s' has the alias '%s'.", model_name, alias)
+        return None
 
-    if not versions:
-        raise ValueError(
-            f"No versions found for registered model '{model_name}'.\n"
-            "Run 'python -m src.models.register_model' first."
-        )
-    
-    latest = max(versions, key=lambda v: int(v.version))
+    logger.info("'%s@%s' -> version %s", model_name, alias, version)
+    return str(version)
 
-    logger.info(
-        "Latest version of '%s': %s (run_id: %s)",
-        model_name,
-        latest.version,
-        latest.run_id,
-    )
-    return latest.version
+def same_split(client: MlflowClient, model_name: str, version: str) -> bool:
+    """True if that version was trained with the current train/test split.
+
+    A champion trained with another split (e.g. the old random split, before
+    src/data/split.py existed) may have been trained on rows that are in today's
+    test set, so its metrics would look better than they are.
+    """
+
+    run_id = client.get_model_version(model_name, version).run_id
+    method = client.get_run(run_id).data.tags.get("split_method")
+    return method == SPLIT_METHOD
 
 # =============================================================================
 #  Evaluation
-#  
+#
 # ---------------------------------------------------------------------------
 def evaluate_registered_model(
-        client: MlflowClient,
         model_version: str,
+        role: str,
         X_test: pd.DataFrame,
         y_test: pd.Series,
-) -> mlflow.models.EvaluationResult:
-    """Run mlflow.evaluate() on the registered model version and return results.
+) -> dict:
+    """Run mlflow.evaluate() on a registered model version and return its metrics.
 
-    Opens a new MLflow run tagged with ``stage="evaluation"`` so evaluation
-    runs are visually separated from training runs in the UI.
+    Opens a new MLflow run tagged with ``stage="evaluation"`` (so register_model.py
+    ignores it) and ``role`` ("challenger" / "champion").
 
     Args:
-        client: An active MlflowClient instance.
         model_version: Version string of the registered model to evaluate.
+        role: "challenger" or "champion", only used for the run name and tags.
         X_test: Test feature matrix.
         y_test: Test target series.
 
     Returns:
-        An EvaluationResult containing metrics and artifact paths.
+        The metrics dict from the EvaluationResult.
     """
 
     model_uri = f"models:/{REGISTERED_MODEL_NAME}/{model_version}"
-    logger.info("Evaluating model URI: %s", model_uri)
+    logger.info("Evaluating %s: %s", role, model_uri)
 
     # mlflow.evaluate() requires a DataFrame that includes the target column
     eval_data = X_test.copy()
     eval_data[TARGET] = y_test.values
 
-    timestap = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_name = f"evaluation_{model_version}_{timestap}"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_name = f"evaluation_{role}_v{model_version}_{timestamp}"
 
     with mlflow.start_run(run_name=run_name):
         # ---------------- Tags ---------------------------------------
         mlflow.set_tags({
             "stage": "evaluation",
+            "role": role,
             "model_version": model_version,
             "registered_model_name": REGISTERED_MODEL_NAME,
             "dataset": INPUT_PATH.name,
         })
 
         # mlflow.evaluate() computes a standard regression metric suite and
-        # logs them automatically to the active run. The ``predictions`` column
-        # name is used internally by MLflow; we do not need to pass it manually.
+        # logs them automatically to the active run.
         result = mlflow.evaluate(
             model=model_uri,
             data=eval_data,
@@ -210,26 +216,27 @@ def evaluate_registered_model(
             evaluators="default",
         )
 
-        logger.info("Evaluation metrics:")
-
-        for key, value in sorted(result.metrics.items()):
-            logger.info("  %-35s %.6f", key, value)
-
-    return result
+    logger.info(
+        "[%s v%s] rmse=%.4f  r2=%.4f",
+        role, model_version, rmse_of(result.metrics), result.metrics.get("r2_score", float("nan")),
+    )
+    return result.metrics
 
 # =============================================================================
-#  Quality gate
-#  
+#  Quality gate & champion decision
+#
 # ---------------------------------------------------------------------------
+def rmse_of(metrics: dict) -> float:
+    """RMSE from mlflow.evaluate() metrics (it logs MSE as "mean_squared_error")."""
+    return metrics.get("mean_squared_error", float("inf")) ** 0.5
+
+
 def passes_quality_gate(metrics: dict) -> bool:
     """Return True if the model meets the minimum quality thresholds.
 
     Thresholds:
         - ``mean_squared_error`` (RMSE equivalent via sqrt): rmse < RMSE_THRESHOLD
         - ``r2_score``: r2 > R2_THRESHOLD
-
-    mlflow.evaluate() for regressors logs ``mean_squared_error`` (MSE) and
-    ``r2_score`` by default. We derive RMSE from MSE for the gate check.
 
     Args:
         metrics: Metrics dict from ``EvaluationResult.metrics``.
@@ -238,9 +245,7 @@ def passes_quality_gate(metrics: dict) -> bool:
         True if both thresholds are satisfied, False otherwise.
     """
 
-    # mlflow.evaluate() key for MSE is "mean_squared_error"
-    mse = metrics.get("mean_squared_error", float("inf"))
-    rmse = mse ** 0.5
+    rmse = rmse_of(metrics)
     r2 = metrics.get("r2_score", float("-inf"))
 
     logger.info(
@@ -250,9 +255,38 @@ def passes_quality_gate(metrics: dict) -> bool:
 
     return rmse < RMSE_THRESHOLD and r2 > R2_THRESHOLD
 
+
+def choose_champion(challenger_metrics: dict, champion_metrics: dict | None) -> str | None:
+    """Decide which model should be served.
+
+    Rules:
+        - The challenger wins if it passes the quality gate and its RMSE is not
+          worse than the champion's (or there is no champion yet).
+        - Otherwise the current champion stays, if it still passes the gate
+          on the current data.
+        - If neither passes, return None (nothing should be deployed).
+
+    Args:
+        challenger_metrics: Metrics of the challenger on the current test set.
+        champion_metrics: Metrics of the current champion, or None if there is none.
+
+    Returns:
+        "challenger", "champion" or None.
+    """
+
+    challenger_ok = passes_quality_gate(challenger_metrics)
+
+    if champion_metrics is None:
+        return "challenger" if challenger_ok else None
+
+    if challenger_ok and rmse_of(challenger_metrics) <= rmse_of(champion_metrics):
+        return "challenger"
+
+    return "champion" if passes_quality_gate(champion_metrics) else None
+
 # =============================================================================
 #  Assign champion alias
-#  
+#
 # ---------------------------------------------------------------------------
 def assign_champion_alias(client: MlflowClient, model_name: str, model_version: str) -> None:
     """Assign the "champion" alias to a model version.
@@ -280,10 +314,10 @@ def assign_champion_alias(client: MlflowClient, model_name: str, model_version: 
 
 # =============================================================================
 # Main
-#  
+#
 # ---------------------------------------------------------------------------
 def main() -> None:
-    """Evaluate the latest registered model and promote it if it passes quality gates."""
+    """Compare challenger and champion on the current test set and pick the champion."""
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI.as_uri())
     mlflow.set_experiment(EXPERIMENT_NAME)
@@ -292,31 +326,59 @@ def main() -> None:
 
     client = MlflowClient()
 
-    # -------- Resolve model version ---------------------------------
-    model_version = get_latest_version(client, REGISTERED_MODEL_NAME)
+    # -------- Resolve model versions --------------------------------
+    challenger = get_version_by_alias(client, REGISTERED_MODEL_NAME, CHALLENGER_ALIAS)
+    if challenger is None:
+        raise ValueError("No challenger found. Run 'python -m src.models.register_model' first.")
+    champion = get_version_by_alias(client, REGISTERED_MODEL_NAME, CHAMPION_ALIAS)
 
     # -------- Load test data ----------------------------------------
     X_test, y_test = load_test_data(INPUT_PATH)
 
     # -------- Evaluate ----------------------------------------------
-    result = evaluate_registered_model(client, model_version, X_test, y_test)
+    challenger_metrics = evaluate_registered_model(challenger, CHALLENGER_ALIAS, X_test, y_test)
 
-    # -------- Quality-gate ------------------------------------------
-    if passes_quality_gate(result.metrics):
-        logger.info("Model passed the quality gate.")
-        assign_champion_alias(client, REGISTERED_MODEL_NAME, model_version)
+    if champion == challenger:
+        # Same version (e.g. re-training on unchanged data): just re-check the gate
+        logger.info("The challenger (v%s) is already the champion.", challenger)
+        winner = "challenger" if passes_quality_gate(challenger_metrics) else None
     else:
-        logger.warning(
-            "Model version %s did NOT pass the quality gate. "
-            "Alias 'champion' was NOT assigned.",
-            model_version,
-        )
+        if champion and not same_split(client, REGISTERED_MODEL_NAME, champion):
+            logger.info(
+                "Champion v%s was trained with a different train/test split: comparing "
+                "on this test set would not be fair. The challenger only needs to pass the gate.",
+                champion,
+            )
+            champion_metrics = None
+        elif champion:
+            champion_metrics = evaluate_registered_model(champion, CHAMPION_ALIAS, X_test, y_test)
+        else:
+            champion_metrics = None
+        winner = choose_champion(challenger_metrics, champion_metrics)
+
+    # -------- Decision ----------------------------------------------
+    if winner == "challenger":
+        if champion != challenger:
+            logger.info("Challenger v%s wins (previous champion: %s).", challenger, champion or "none")
+        assign_champion_alias(client, REGISTERED_MODEL_NAME, challenger)
+
+    elif winner == "champion":
+        if passes_quality_gate(challenger_metrics):
+            logger.info("Challenger v%s is worse than champion v%s — champion kept.", challenger, champion)
+        else:
+            ci_warning(
+                f"Challenger v{challenger} did NOT pass the quality gate — "
+                f"champion v{champion} kept. Check the new data/training."
+            )
+
+    else:
+        ci_warning("No model passes the quality gate on the current data. Nothing will be deployed.")
         # Exit with an error so the CI pipeline stops here and never
         # builds or deploys an image with a model that failed the gate.
         sys.exit(1)
 
     logger.info(
-        "Done. Open the MLflow UI to review the evaluation run:\n"
+        "Done. Open the MLflow UI to review the evaluation runs:\n"
         "  mlflow ui --backend-store-uri %s",
         MLFLOW_TRACKING_URI,
     )
@@ -324,8 +386,3 @@ def main() -> None:
 # =============================================================================
 if __name__ == "__main__":
     main()
-
-
-
-
-

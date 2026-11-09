@@ -16,7 +16,7 @@ serialised model artifact so runs can be compared in the MLflow UI.
 - mlflow.set_experiment()
 
 - load_features()       --> cargar 'data/processed/train_v1.csv'
-- train_test_split()
+- split_train_test()    --> split estable por hash (src/data/split.py)
 
 - run_experiment(
         model,
@@ -38,7 +38,6 @@ import mlflow.sklearn
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
 
 # ===========================================================================
 #  Paths & constants
@@ -46,12 +45,13 @@ from sklearn.model_selection import train_test_split
 # ---------------------------------------------------------------------------
 from src.config import (
     EXPERIMENT_NAME,
+    FEATURE_STATS_FILE,
     MLFLOW_TRACKING_URI,
     PROCESSED_PATH as INPUT_PATH,   # usamos train_v1.csv (SIN feature_engineering)
     RANDOM_STATE,
-    TARGET,
-    TEST_SIZE,
 )
+from src.data.split import SPLIT_METHOD, split_train_test
+from src.data.versioning import dataset_hash
 
 # ===========================================================================
 #  Logging (creamos un logger asociado a este módulo)
@@ -102,10 +102,8 @@ def split_data(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series,
         Tuple of (X_train, X_test, y_train, y_test).
     """
 
-    X = df.drop(columns=[TARGET])
-    y = df[TARGET]
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE)
+    # Stable hash-based split: adding new rows does not move the old ones
+    X_train, X_test, y_train, y_test = split_train_test(df)
 
     logger.info("Train size: %d | Test size: %d", len(X_train), len(X_test))
 
@@ -138,7 +136,7 @@ def compute_metrics(y_true: pd.Series, y_pred) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 def run_experiment(model, model_type: str, params: dict,
                    X_train: pd.DataFrame, X_test: pd.DataFrame,
-                   y_train: pd.Series, y_test: pd.Series) -> None:
+                   y_train: pd.Series, y_test: pd.Series, data_hash: str) -> None:
     """Train a model and log everything to a single MLflow run.
 
     The run name follows the convention ``{model_type}_{YYYYMMDD_HHMMSS}``
@@ -148,6 +146,12 @@ def run_experiment(model, model_type: str, params: dict,
         - ``model_type``: class name of the estimator
         - ``dataset``: source file name
         - ``stage``: always ``"training"`` for this script
+        - ``dataset_hash``: version of the data (register_model.py only
+          compares runs trained on the same data)
+        - ``split_method``: how train/test were split (see src/data/split.py)
+
+    Artifacts logged: the model and ``feature_stats.json`` (min/max of every
+    training feature, used by the API to flag out-of-range inputs).
 
     Args:
         model: An unfitted scikit-learn estimator.
@@ -157,6 +161,7 @@ def run_experiment(model, model_type: str, params: dict,
         X_test: Test feature matrix.
         y_train: Training target series.
         y_test: Test target series.
+        data_hash: Hash of the full processed dataset (see src/data/versioning.py).
     """
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -168,6 +173,8 @@ def run_experiment(model, model_type: str, params: dict,
             "model_type": model_type,
             "dataset": INPUT_PATH.name,
             "stage": "training",
+            "dataset_hash": data_hash,
+            "split_method": SPLIT_METHOD,
         })
 
         # ---------- Params -----------------------------------------
@@ -199,6 +206,13 @@ def run_experiment(model, model_type: str, params: dict,
             input_example=X_train.head(5),   
         )
 
+        # ---------- Feature stats (for input monitoring in the API) --
+        feature_stats = {
+            col: {"min": float(X_train[col].min()), "max": float(X_train[col].max())}
+            for col in X_train.columns
+        }
+        mlflow.log_dict(feature_stats, FEATURE_STATS_FILE)
+
         logger.info("[%s] Model artifact logged.", model_type)
 
 # ===========================================================================
@@ -214,6 +228,8 @@ def main() -> None:
     logger.info("Experiment          : %s", EXPERIMENT_NAME)
 
     df = load_features(INPUT_PATH)  # data/processed/train_v1.csv
+    data_hash = dataset_hash(df)
+    logger.info("Dataset hash        : %s", data_hash)
     X_train, X_test, y_train, y_test = split_data(df)
 
     # --- Model 1: LinearRegression -----------------------------------------
@@ -226,6 +242,7 @@ def main() -> None:
         X_test=X_test,
         y_train=y_train,
         y_test=y_test,
+        data_hash=data_hash,
     )
 
     # --- Model 2: RandomForestRegressor ------------------------------------
@@ -239,6 +256,7 @@ def main() -> None:
         X_test=X_test,
         y_train=y_train,
         y_test=y_test,
+        data_hash=data_hash,
     )
 
     # --- Model 3: GradientBoostingRegressor ------------------------------------
@@ -250,6 +268,7 @@ def main() -> None:
         X_test=X_test,
         y_train=y_train,
         y_test=y_test,
+        data_hash=data_hash,
     )
 
     logger.info(
