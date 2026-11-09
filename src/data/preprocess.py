@@ -23,14 +23,10 @@ It outputs a processed dataset ready for machine learning.
 ============================================================================
 """
 
-import numpy as np
 import pandas as pd
 from pathlib import Path
 
-# =========================================================================
-BASE_DIR = Path(__file__).resolve().parents[2]
-RAW_PATH = BASE_DIR / "data" / "raw" / "diabetes_dataset.csv"
-PROCESSED_PATH = BASE_DIR / "data" / "processed" / "train_v1.csv"
+from src.config import PROCESSED_PATH, RAW_PATH
 
 # =========================================================================
 def load_data(path: Path) -> pd.DataFrame:

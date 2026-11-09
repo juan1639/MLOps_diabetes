@@ -11,17 +11,17 @@ This module validates the dataset using the notebook validation.
 import pandas as pd
 import numpy as np
 
+from src.config import FEATURE_COLUMNS, RAW_PATH, TARGET
+
 # =========================================================================
 def validate_data(dataframe: pd.DataFrame) -> None:
     """Apply simple validate logic"""
 
     # 1. Check if target exists
-    assert 'target' in dataframe.columns, "Target column missing!"
+    assert TARGET in dataframe.columns, "Target column missing!"
 
     # 2. Check for required features
-    required_features = ['age', 'sex', 'bmi', 'bp', 's1', 's2', 's3', 's4', 's5', 's6']
-
-    for col in required_features:
+    for col in FEATURE_COLUMNS:
         assert col in dataframe.columns, f"Feature {col} is missing!"
 
     # 3. Ensure all columns are numeric
@@ -39,7 +39,7 @@ def validate_data(dataframe: pd.DataFrame) -> None:
 def main() -> None:
     """Load the raw dataset and run validation."""
 
-    path = "data/raw/diabetes_dataset.csv"
+    path = RAW_PATH
     print(f"Loading dataset from: {path}")
     
     df = pd.read_csv(path)

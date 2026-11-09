@@ -1,0 +1,5 @@
+# Development-only tools (tests + lint). Not installed in the Docker image.
+-r requirements.txt
+pytest==9.2.0
+ruff==0.17.4
+httpx==0.28.1      # needed by FastAPI's TestClient

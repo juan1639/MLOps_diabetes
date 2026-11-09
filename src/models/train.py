@@ -1,5 +1,5 @@
 """
-This module trains three regression models on the California Housing dataset
+This module trains three regression models on the Diabetes dataset
 and tracks every run with MLflow Experiment Tracking.
 
 For each model the script logs hyperparameters, evaluation metrics and the
@@ -44,14 +44,14 @@ from sklearn.model_selection import train_test_split
 #  Paths & constants
 #  
 # ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parents[2]
-INPUT_PATH = BASE_DIR / "data" / "processed" / "train_v1.csv"   # usamos train_v1.csv (SIN feature_engineering)
-MLFLOW_TRACKING_URI = BASE_DIR / "mlruns"
-
-EXPERIMENT_NAME = "diabetes-dataset"
-TARGET = "target"
-TEST_SIZE = 0.2
-RANDOM_STATE = 42
+from src.config import (
+    EXPERIMENT_NAME,
+    MLFLOW_TRACKING_URI,
+    PROCESSED_PATH as INPUT_PATH,   # usamos train_v1.csv (SIN feature_engineering)
+    RANDOM_STATE,
+    TARGET,
+    TEST_SIZE,
+)
 
 # ===========================================================================
 #  Logging (creamos un logger asociado a este módulo)
@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 #  
 # ---------------------------------------------------------------------------
 def load_features(path: Path) -> pd.DataFrame:
-    """Load the engineered feature dataset from CSV.
+    """Load the processed dataset from CSV.
 
     Args:
         path: Path to train_v1.csv.
@@ -84,7 +84,7 @@ def load_features(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(
             f"Input file not found: {path}\n"
-            "Run the data pipeline first: python src/data/feature_engineering.py"
+            "Run the data pipeline first: python -m src.data.preprocess"
         )
 
     df = pd.read_csv(path)
@@ -206,7 +206,7 @@ def run_experiment(model, model_type: str, params: dict,
 #  
 # ---------------------------------------------------------------------------
 def main() -> None:
-    """Run the full experiment tracking pipeline for both models."""
+    """Run the full experiment tracking pipeline for the three models."""
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI.as_uri())
     mlflow.set_experiment(EXPERIMENT_NAME)

@@ -14,7 +14,7 @@ los archivos tipo train_db.py etc... o los tipo train.py
 ****************************************************************************************
 """
 """
-This module trains three regression models on the California Housing dataset
+This module trains three regression models on the Diabetes dataset
 and tracks every run with MLflow Experiment Tracking.
 
 For each model the script logs hyperparameters, evaluation metrics and the
@@ -104,7 +104,7 @@ def load_features(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(
             f"Input file not found: {path}\n"
-            "Run the data pipeline first: python src/data/feature_engineering.py"
+            "Run the data pipeline first: python -m src.data.preprocess"
         )
 
     df = pd.read_csv(path)

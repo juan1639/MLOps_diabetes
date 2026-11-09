@@ -1,0 +1,21 @@
+# Configuration for the development tools (lint + tests).
+# The project itself is not installed as a package: scripts are run with
+# "python -m src.<folder>.<script>" from the repository root.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+# E/F = pycodestyle errors + pyflakes (unused imports, undefined names...)
+select = ["E", "F"]
+# E402: scripts start with several docstring blocks before the imports (on purpose)
+ignore = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Lets the tests import "src.config", "src.api.main"... from the repo root
+pythonpath = ["."]
+# Deprecation warnings raised inside MLflow itself (not our code)
+filterwarnings = ["ignore::DeprecationWarning"]

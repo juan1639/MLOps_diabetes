@@ -15,3 +15,8 @@ __pycache__
 # Raw and incoming data are not needed to serve the champion model
 data/raw
 data/incoming
+
+# Tests and tool caches are not needed to serve the model
+tests
+.ruff_cache
+.pytest_cache
